@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "hal_display.h"
+#include "hal_buttons.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_io.h"
 #include <stdio.h>
@@ -15,12 +16,51 @@ static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_
     return false;
 }
 
-#define LCD_H_RES 240
 #define LCD_V_RES 320
+
+/* Protótipos de Funções Internas */
+static void enter_screen_focus(void);
+static void exit_screen_focus(void);
+static void internal_obj_event_cb(lv_event_t * e);
 
 /* Objetos Globais da UI */
 static lv_obj_t *tv;
 static lv_obj_t *t1, *t2, *t3, *t4;
+static lv_group_t * g_main;
+
+static void enter_screen_focus(void) {
+    uint16_t act_tab = lv_tabview_get_tab_act(tv);
+    lv_obj_t * target_obj = NULL;
+    
+    if(act_tab == 0) target_obj = (lv_obj_t *)lv_obj_get_user_data(t1);
+    else if(act_tab == 1) target_obj = (lv_obj_t *)lv_obj_get_user_data(t2);
+    else if(act_tab == 2) target_obj = (lv_obj_t *)lv_obj_get_user_data(t3);
+    else if(act_tab == 3) target_obj = (lv_obj_t *)lv_obj_get_user_data(t4);
+
+    if(target_obj) {
+        lv_group_remove_all_objs(g_main);
+        
+        // Se for uma lista ou container, adiciona os filhos ao grupo para navegação
+        uint32_t i;
+        for(i = 0; i < lv_obj_get_child_cnt(target_obj); i++) {
+            lv_obj_t * child = lv_obj_get_child(target_obj, i);
+            lv_group_add_obj(g_main, child);
+        }
+        
+        // Se não tiver filhos, adiciona o próprio objeto
+        if(lv_obj_get_child_cnt(target_obj) == 0) {
+            lv_group_add_obj(g_main, target_obj);
+        }
+        
+        lv_group_focus_next(g_main); // Foca no primeiro item
+    }
+}
+
+static void exit_screen_focus(void) {
+    lv_group_remove_all_objs(g_main);
+    lv_group_add_obj(g_main, tv);
+    lv_group_focus_obj(tv);
+}
 
 /* Estilos Reutilizáveis */
 static lv_style_t style_card;
@@ -38,94 +78,131 @@ static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
     // Desligamos isso aqui para evitar rasgar a tela durante a transferência assíncrona!
 }
 
-// Callback chamado pelo driver do LCD quando a transferência termina (opcional para sincronização)
-// No momento simplificaremos sem ele ou usando o lv_disp_flush_ready direto no flush se for síncrono.
-/**
- * @brief Cria a tela de Dashboard (Coleta de Dados)
- */
-static void create_screen_dashboard(lv_obj_t *parent) {
+static void create_screen_readings(lv_obj_t * parent) {
     lv_obj_set_style_bg_color(parent, COLOR_BG_DARK, 0);
+    lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(parent, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    /* Header */
-    lv_obj_t *header = lv_label_create(parent);
-    lv_label_set_text(header, "FAZENDA MODELO");
-    lv_obj_set_style_text_font(header, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(header, COLOR_GRAY_TEXT, 0);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 10);
+    // O user_data do parent guardará o objeto que deve receber o foco inicial
+    // Será definido no final desta função (ex: btn_sync)
 
-    /* Card Principal (ID do Brinco) */
-    lv_obj_t *card = lv_obj_create(parent);
-    lv_obj_set_size(card, 200, 100);
-    lv_obj_add_style(card, &style_card, 0);
-    lv_obj_align(card, LV_ALIGN_CENTER, 0, -20);
-
-    lv_obj_t *id_label = lv_label_create(card);
-    lv_label_set_text(id_label, "ID: 4509 - S");
-    lv_obj_set_style_text_font(id_label, &lv_font_montserrat_14, 0); // Alterado de 20 para 14
-    lv_obj_align(id_label, LV_ALIGN_CENTER, 0, 0);
-
-    /* Botão de Scan (Floating Action Button style) */
-    lv_obj_t *btn_scan = lv_btn_create(parent);
-    lv_obj_set_size(btn_scan, 120, 45);
-    lv_obj_add_style(btn_scan, &style_btn, 0);
-    lv_obj_align(btn_scan, LV_ALIGN_BOTTOM_MID, 0, -20);
-
-    lv_obj_t *btn_label = lv_label_create(btn_scan);
-    lv_label_set_text(btn_label, LV_SYMBOL_VIDEO " SCAN");
-    lv_obj_align(btn_label, LV_ALIGN_CENTER, 0, 0);
-}
-
-/**
- * @brief Cria a tela de Conectividade
- */
-static void create_screen_iot(lv_obj_t *parent) {
-    lv_obj_set_style_bg_color(parent, COLOR_BG_DARK, 0);
-
-    lv_obj_t *list = lv_list_create(parent);
-    lv_obj_set_size(list, 220, 180);
-    lv_obj_align(list, LV_ALIGN_TOP_MID, 0, 40);
-    lv_obj_set_style_bg_color(list, COLOR_ANTHRACITE, 0);
-    lv_obj_set_style_border_width(list, 0, 0);
-
-    lv_list_add_text(list, "NETWORKS");
-    lv_list_add_btn(list, LV_SYMBOL_WIFI, "Fazenda_WiFi: 75%");
-    lv_list_add_btn(list, LV_SYMBOL_BLUETOOTH, "Bastão V3: Pareado");
-    lv_list_add_btn(list, LV_SYMBOL_UPLOAD, "Cloud Sync: OK");
-}
-
-/**
- * @brief Cria a tela de Configurações
- */
-static void create_screen_settings(lv_obj_t *parent) {
-    lv_obj_set_style_bg_color(parent, COLOR_BG_DARK, 0);
-
-    lv_obj_t *title = lv_label_create(parent);
-    lv_label_set_text(title, "SISTEMA");
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-
-    /* Slider de Brilho */
-    lv_obj_t *slider = lv_slider_create(parent);
-    lv_obj_set_width(slider, 180);
-    lv_obj_align(slider, LV_ALIGN_TOP_MID, 0, 60);
-    lv_obj_set_style_bg_color(slider, COLOR_EMERALD, LV_PART_INDICATOR);
-}
-
-/**
- * @brief Cria a tela de Analytics (Gráficos)
- */
-static void create_screen_analytics(lv_obj_t *parent) {
-    lv_obj_set_style_bg_color(parent, COLOR_BG_DARK, 0);
-
-    lv_obj_t *chart = lv_chart_create(parent);
-    lv_obj_set_size(chart, 200, 150);
-    lv_obj_align(chart, LV_ALIGN_CENTER, 0, 0);
-    lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
+    // --- LINHA SUPERIOR (Status) ---
+    // ... restante da tela ...
+    lv_obj_t * header = lv_obj_create(parent);
+    lv_obj_set_size(header, lv_pct(100), 20);
+    lv_obj_set_style_bg_opa(header, 0, 0);
+    lv_obj_set_style_border_width(header, 0, 0);
     
-    lv_chart_series_t *ser = lv_chart_add_series(chart, COLOR_EMERALD, LV_CHART_AXIS_PRIMARY_Y);
-    lv_chart_set_next_value(chart, ser, 10);
-    lv_chart_set_next_value(chart, ser, 30);
-    lv_chart_set_next_value(chart, ser, 20);
-    lv_chart_set_next_value(chart, ser, 50);
+    lv_obj_t * status = lv_label_create(header);
+    lv_label_set_text(status, LV_SYMBOL_WIFI " " LV_SYMBOL_BLUETOOTH " " LV_SYMBOL_GPS " " LV_SYMBOL_BATTERY_FULL);
+    lv_obj_set_style_text_color(status, COLOR_EMERALD, 0);
+    lv_obj_align(status, LV_ALIGN_RIGHT_MID, -10, 0);
+
+    // --- ÁREA CENTRAL (Dados - Altura 5) ---
+    lv_obj_t * center = lv_obj_create(parent);
+    lv_obj_set_size(center, lv_pct(95), 160);
+    lv_obj_add_style(center, &style_card, 0);
+    
+    lv_obj_t * farm_title = lv_label_create(center);
+    lv_label_set_text(farm_title, "Fazenda Raptor");
+    lv_obj_set_style_text_color(farm_title, COLOR_GRAY_TEXT, 0);
+    lv_obj_align(farm_title, LV_ALIGN_TOP_MID, 0, 5);
+
+    lv_obj_t * bovine_id = lv_label_create(center);
+    lv_label_set_text(bovine_id, "Boi Bandido");
+    lv_obj_set_style_text_font(bovine_id, &lv_font_montserrat_16, 0); 
+    lv_obj_align(bovine_id, LV_ALIGN_CENTER, 0, -10);
+
+    lv_obj_t * time_label = lv_label_create(center);
+    lv_label_set_text(time_label, "25/04/2026 - 07:15");
+    lv_obj_align(time_label, LV_ALIGN_BOTTOM_MID, 0, -25);
+
+    lv_obj_t * gps_coords = lv_label_create(center);
+    lv_label_set_text(gps_coords, "-20.444203, -54.619443");
+    lv_obj_set_style_text_color(gps_coords, COLOR_GRAY_TEXT, 0);
+    lv_obj_align(gps_coords, LV_ALIGN_BOTTOM_MID, 0, -5);
+
+    // --- LINHA INFERIOR (Sensores - Altura 2) ---
+    lv_obj_t * footer = lv_obj_create(parent);
+    lv_obj_set_size(footer, lv_pct(100), 40);
+    lv_obj_set_style_bg_opa(footer, 0, 0);
+    lv_obj_set_style_border_width(footer, 0, 0);
+
+    lv_obj_t * telemetry = lv_label_create(footer);
+    lv_label_set_text(telemetry, "Inc: X:1.2 Y:0.5 | Bat: 3.8V");
+    lv_obj_set_style_text_color(telemetry, COLOR_GRAY_TEXT, 0);
+    lv_obj_align(telemetry, LV_ALIGN_TOP_MID, 0, 0);
+
+    // Botão removido para evitar sobreposição no rodapé
+    lv_obj_set_user_data(parent, NULL);
+}
+
+static void create_screen_connectivity(lv_obj_t * parent) {
+    lv_obj_set_style_bg_color(parent, COLOR_BG_DARK, 0);
+    lv_obj_t * list = lv_list_create(parent);
+    lv_obj_set_size(list, lv_pct(100), lv_pct(95));
+    lv_obj_align(list, LV_ALIGN_BOTTOM_MID, 0, 0);
+    
+    // Adiciona itens de exemplo para testar a navegação vertical
+    lv_obj_t * btn;
+    btn = lv_list_add_btn(list, LV_SYMBOL_WIFI, "Rede Fazenda_2G");
+    lv_obj_add_event_cb(btn, internal_obj_event_cb, LV_EVENT_KEY, NULL);
+    
+    btn = lv_list_add_btn(list, LV_SYMBOL_WIFI, "Rede Sede_5G");
+    lv_obj_add_event_cb(btn, internal_obj_event_cb, LV_EVENT_KEY, NULL);
+    
+    btn = lv_list_add_btn(list, LV_SYMBOL_SETTINGS, "Configurar IP");
+    lv_obj_add_event_cb(btn, internal_obj_event_cb, LV_EVENT_KEY, NULL);
+
+    lv_obj_set_user_data(parent, list); // Define o objeto principal para foco
+}
+
+static void create_screen_device(lv_obj_t * parent) {
+    lv_obj_set_style_bg_color(parent, COLOR_BG_DARK, 0);
+    // ... restante do device ...
+}
+
+static void create_screen_info(lv_obj_t * parent) {
+    lv_obj_set_style_bg_color(parent, COLOR_BG_DARK, 0);
+    // ... restante da info ...
+}
+
+static void tabview_event_cb(lv_event_t * e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    uint32_t key = lv_event_get_key(e);
+
+    if(code == LV_EVENT_KEY) {
+        ESP_LOGI(TAG, "Tecla recebida no TabView: %d", (int)key);
+        if(key == LV_KEY_RIGHT) {
+            uint16_t tab = lv_tabview_get_tab_act(tv);
+            if(tab < 3) lv_tabview_set_act(tv, tab + 1, LV_ANIM_ON);
+        } else if(key == LV_KEY_LEFT) {
+            uint16_t tab = lv_tabview_get_tab_act(tv);
+            if(tab > 0) lv_tabview_set_act(tv, tab - 1, LV_ANIM_ON);
+        } else if(key == LV_KEY_ENTER) {
+            ESP_LOGI(TAG, "Botão A 3s detectado: Entrando no foco da tela interna");
+            enter_screen_focus();
+        }
+    }
+}
+
+static void internal_obj_event_cb(lv_event_t * e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if(code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        if(key == LV_KEY_ESC) {
+            ESP_LOGI(TAG, "Botão B 3s detectado: Saindo da tela interna");
+            exit_screen_focus();
+        } else if(key == LV_KEY_LEFT) {
+            // Tradução dinâmica: No Nível 2, Esquerda vira "Cima" (Anterior)
+            ESP_LOGI(TAG, "Nível 2: Traduzindo LEFT para PREV");
+            lv_group_focus_prev(g_main);
+        } else if(key == LV_KEY_RIGHT) {
+            // Tradução dinâmica: No Nível 2, Direita vira "Baixo" (Próximo)
+            ESP_LOGI(TAG, "Nível 2: Traduzindo RIGHT para NEXT");
+            lv_group_focus_next(g_main);
+        }
+    }
 }
 
 void gui_manager_init(void) {
@@ -159,10 +236,21 @@ void gui_manager_init(void) {
     gui_style_init_card(&style_card);
     gui_style_init_btn_primary(&style_btn);
 
+    ESP_LOGI(TAG, "--- INTEGRAÇÃO DE NAVEGAÇÃO POR BOTÕES (KEYPAD) ---");
+    hal_buttons_init();
+    lv_indev_t * indev = hal_buttons_get_indev();
+
+    g_main = lv_group_create();
+    // REMOVIDO: lv_group_set_default(g); para evitar que tudo entre no grupo automaticamente
+    lv_indev_set_group(indev, g_main);
+
     ESP_LOGI(TAG, "Construindo Navegação...");
     
     /* TabView em baixo */
     tv = lv_tabview_create(lv_scr_act(), LV_DIR_BOTTOM, 50);
+    lv_group_add_obj(g_main, tv); // O grupo começa controlando apenas as abas (Nível 1)
+    lv_group_focus_obj(tv);      // Garante que o TabView comece com o foco
+    lv_obj_add_event_cb(tv, tabview_event_cb, LV_EVENT_KEY, NULL);
     lv_obj_set_style_bg_color(tv, COLOR_BG_DARK, 0);
     
     /* Configuração da Barra de Abas */
@@ -177,10 +265,10 @@ void gui_manager_init(void) {
     t3 = lv_tabview_add_tab(tv, LV_SYMBOL_SETTINGS);
     t4 = lv_tabview_add_tab(tv, LV_SYMBOL_LIST); // Alterado de GRAPH para LIST
 
-    create_screen_dashboard(t1);
-    create_screen_iot(t2);
-    create_screen_settings(t3);
-    create_screen_analytics(t4);
+    create_screen_readings(t1);
+    create_screen_connectivity(t2);
+    create_screen_device(t3);
+    create_screen_info(t4);
 
     ESP_LOGI(TAG, "Interface pronta.");
 }
