@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "hal_display.h"
 #include "gui_manager.h"
+#include "hal_sensors.h"
 
 #include "lvgl.h"
 
@@ -14,20 +15,35 @@ static const char *TAG = "K10_MAIN";
  * @brief Thread dedicada à Interface Gráfica LVGL (Fixada no Core 1).
  */
 void gui_task(void *pvParameters) {
-    ESP_LOGI(TAG, "Iniciando Task LVGL");
+    ESP_LOGI(TAG, "Iniciando Task LVGL e Sensores");
     
-    // 1. Inicializa driver LCD e Touch
+    // 1. Inicializa driver LCD, Touch e Sensores
     hal_display_init();
+    hal_sensors_init();
 
     // 2. Inicializa LVGL e Gerenciador de UI
     gui_manager_init();
 
+    uint32_t last_tick = esp_log_timestamp();
+    int sensor_timer = 0;
+
     while (1) {
-        // O lv_timer_handler precisa ser chamado periodicamente
+        uint32_t current_tick = esp_log_timestamp();
+        lv_tick_inc(current_tick - last_tick);
+        last_tick = current_tick;
+
+        // Atualiza sensores a cada 500ms
+        if(sensor_timer++ >= 50) { 
+            accel_data_t accel;
+            battery_data_t bat;
+            if(hal_sensors_read_accel(&accel) == ESP_OK && hal_sensors_read_battery(&bat) == ESP_OK) {
+                gui_manager_update_sensors(&accel, &bat);
+            }
+            sensor_timer = 0;
+        }
+
         lv_timer_handler();
         vTaskDelay(pdMS_TO_TICKS(10));
-        // Informa o LVGL que se passaram 10ms
-        lv_tick_inc(10);
     }
 }
 

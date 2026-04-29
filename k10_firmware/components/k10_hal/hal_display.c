@@ -84,7 +84,7 @@ void hal_display_init(void) {
         .miso_io_num = PIN_NUM_MISO,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = LCD_H_RES * 80 * sizeof(uint16_t),
+        .max_transfer_sz = LCD_H_RES * 100 * sizeof(uint16_t),
     };
     ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
 
@@ -93,7 +93,7 @@ void hal_display_init(void) {
     esp_lcd_panel_io_spi_config_t io_config = {
         .dc_gpio_num = PIN_NUM_DC,
         .cs_gpio_num = PIN_NUM_CS,
-        .pclk_hz = 10 * 1000 * 1000, // Reduzido para 10MHz p/ estabilidade absoluta
+        .pclk_hz = 40 * 1000 * 1000, // Aumentado para 40MHz p/ fluidez
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
         .spi_mode = 0,
@@ -119,6 +119,12 @@ void hal_display_init(void) {
     esp_lcd_panel_swap_xy(panel_handle, false);      // <-- Modo Retrato Nativo (Não inverte largura com altura)
     
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+
+    // Desliga os LEDs RGB (GPIO 42 no Unihiker K10)
+    ESP_LOGI(TAG, "Desativando LEDs RGB (GPIO 42)...");
+    gpio_reset_pin(42);
+    gpio_set_direction(42, GPIO_MODE_OUTPUT);
+    gpio_set_level(42, 0);
 }
 
 esp_lcd_panel_handle_t hal_display_get_panel_handle(void) {
